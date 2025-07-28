@@ -57,6 +57,10 @@ func taskHandler(store task.Store, proc *processor.Processor) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
+			if len(parts) == 2 && parts[1] == "download" {
+				downloadArchive(w, r, store, id)
+				return
+			}
 			if len(parts) != 1 {
 				http.NotFound(w, r)
 				return
@@ -136,4 +140,20 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func downloadArchive(w http.ResponseWriter, r *http.Request, store task.Store, id string) {
+	t, err := store.Get(id)
+	if err != nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if t.Status != task.StatusDone || t.ResultPath == "" {
+		http.Error(w, "archive not ready", http.StatusConflict)
+		return
+	}
+	fname := path.Base(t.ResultPath)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fname))
+	http.ServeFile(w, r, t.ResultPath)
 }
