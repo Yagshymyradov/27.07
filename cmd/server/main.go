@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"file-archiver/internal/processor"
 	"file-archiver/internal/task"
 	"fmt"
 	"log"
@@ -16,9 +17,11 @@ func main() {
 	addr := ":" + getenv("PORT", "8080")
 
 	store := task.NewMemoryStore()
+	proc := processor.New(store, 3)
+	proc.Start()
 
 	http.HandleFunc("/tasks", createTaskHandler(store))
-	http.HandleFunc("/tasks/", taskHandler(store))
+	http.HandleFunc("/tasks/", taskHandler(store, proc))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "file-archiver: service is up")
@@ -41,7 +44,7 @@ func createTaskHandler(store task.Store) http.HandlerFunc {
 	}
 }
 
-func taskHandler(store task.Store) http.HandlerFunc {
+func taskHandler(store task.Store, proc *processor.Processor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/tasks/")
 		parts := strings.Split(rest, "/")
@@ -65,18 +68,18 @@ func taskHandler(store task.Store) http.HandlerFunc {
 			}
 			respondJSON(w, http.StatusOK, t)
 		case http.MethodPost:
-			if len(parts) != 2 || parts[1] == "items" {
+			if len(parts) != 2 || parts[1] != "items" {
 				http.NotFound(w, r)
 				return
 			}
-			addItem(w, r, store, id)
+			addItem(w, r, store, proc, id)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
 }
 
-func addItem(w http.ResponseWriter, r *http.Request, store task.Store, id string) {
+func addItem(w http.ResponseWriter, r *http.Request, store task.Store, proc *processor.Processor, id string) {
 	var req struct {
 		URL string `json:"url"`
 	}
@@ -89,16 +92,21 @@ func addItem(w http.ResponseWriter, r *http.Request, store task.Store, id string
 		return
 	}
 
-	if err := store.AddItem(id, req.URL); err != nil {
+	ready, err := store.AddItem(id, req.URL)
+	if err != nil {
 		switch err {
 		case task.ErrNotFound:
 			http.Error(w, "task not found", http.StatusNotFound)
-		case task.ErrTooManyUtems, task.ErrTaskFinalized:
+		case task.ErrTooManyItems, task.ErrTaskFinalized:
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
+	}
+
+	if ready {
+		proc.Enqueue(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

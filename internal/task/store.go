@@ -9,19 +9,22 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("task not found")
-	ErrTooManyUtems = errors.New("task already has 3 items")
-	ErrTaskFinalized = errors.New("taskt is finalized and cannot be modified")
+	ErrNotFound      = errors.New("task not found")
+	ErrTooManyItems  = errors.New("task already has 3 items")
+	ErrTaskFinalized = errors.New("task is finalized and cannot be modified")
 )
 
 type Store interface {
 	Create() *Task
 	Get(id string) (*Task, error)
-	AddItem(id string, item string) error
+	// AddItem appends url to task. Returns ready==true when after adding задача содержит 3 items и переведена в StatusPending.
+	AddItem(id string, url string) (ready bool, err error)
+	// Update выполняет атомарное изменение задачи под блокировкой.
+	Update(id string, fn func(t *Task)) error
 }
 
 type memoryStore struct {
-	mu sync.RWMutex
+	mu    sync.RWMutex
 	tasks map[string]*Task
 }
 
@@ -33,8 +36,8 @@ func NewMemoryStore() *memoryStore {
 
 func (m *memoryStore) Create() *Task {
 	task := &Task{
-		ID: newID(),
-		Status: StatusNew,
+		ID:        newID(),
+		Status:    StatusNew,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -54,29 +57,44 @@ func (m *memoryStore) Get(id string) (*Task, error) {
 	return t, nil
 }
 
-func (m *memoryStore) AddItem(id string, item string) error {
+func (m *memoryStore) AddItem(id string, url string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	t, ok := m.tasks[id]
 	if !ok {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
 	if len(t.Items) >= 3 {
-		return ErrTooManyUtems
+		return false, ErrTooManyItems
 	}
 	if t.Status != StatusNew && t.Status != StatusPending {
-		return ErrTaskFinalized
+		return false, ErrTaskFinalized
 	}
 
 	t.Items = append(t.Items, Item{
-		URL: item,
+		URL:    url,
 		Status: ItemPending,
 	})
 
+	ready := false
 	if len(t.Items) == 3 {
 		t.Status = StatusPending
+		ready = true
 	}
+	t.UpdatedAt = time.Now()
+	return ready, nil
+}
+
+// Update выполняет атомарное изменение задачи.
+func (m *memoryStore) Update(id string, fn func(t *Task)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tasks[id]
+	if !ok {
+		return ErrNotFound
+	}
+	fn(t)
 	t.UpdatedAt = time.Now()
 	return nil
 }
