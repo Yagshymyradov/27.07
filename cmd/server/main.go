@@ -20,7 +20,9 @@ func main() {
 	proc := processor.New(store, 3)
 	proc.Start()
 
-	http.HandleFunc("/tasks", createTaskHandler(store))
+	const maxActiveTasks = 3
+
+	http.HandleFunc("/tasks", createTaskHandler(store, maxActiveTasks))
 	http.HandleFunc("/tasks/", taskHandler(store, proc))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -33,12 +35,18 @@ func main() {
 	}
 }
 
-func createTaskHandler(store task.Store) http.HandlerFunc {
+func createTaskHandler(store task.Store, limit int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		if store.ActiveCount() >= limit {
+			http.Error(w, "server busy: too many active tasks", http.StatusLocked) // 423
+			return
+		}
+
 		t := store.Create()
 		respondJSON(w, http.StatusCreated, t)
 	}

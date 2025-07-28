@@ -21,6 +21,8 @@ type Store interface {
 	AddItem(id string, url string) (ready bool, err error)
 	// Update выполняет атомарное изменение задачи под блокировкой.
 	Update(id string, fn func(t *Task)) error
+	// ActiveCount возвращает количество задач, которые ещё не перешли в финальный статус (done|error).
+	ActiveCount() int
 }
 
 type memoryStore struct {
@@ -97,6 +99,19 @@ func (m *memoryStore) Update(id string, fn func(t *Task)) error {
 	fn(t)
 	t.UpdatedAt = time.Now()
 	return nil
+}
+
+// ActiveCount подсчитывает задачи, не завершённые окончательно.
+func (m *memoryStore) ActiveCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, t := range m.tasks {
+		if t.Status != StatusDone && t.Status != StatusError {
+			n++
+		}
+	}
+	return n
 }
 
 func newID() string {
